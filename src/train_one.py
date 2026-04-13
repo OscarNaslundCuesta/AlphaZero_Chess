@@ -53,6 +53,9 @@ class board_data_all(IterableDataset):
                             print(f"EOFError in file {file}")
                             data=[]
                     data = np.array(data,dtype="object")
+                    if data.ndim < 2 or len(data) == 0:
+                        print(f"Skipping file {file} (empty or malformed)")
+                        continue
                     new_file_data=board_data(data)
 
                     newLoader=DataLoader(new_file_data,  shuffle=False, pin_memory=True)
