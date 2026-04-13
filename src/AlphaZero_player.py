@@ -100,8 +100,7 @@ class AlphaZero(Player):
             #print(f"{move}")
             #for i in current_board.current_board.tolist():
             #    print(", ".join([str(l).rjust(3) for l in i]))
-        #return current_board   
-        return current_board.current_board.tolist()
+        return current_board
     
     def __str__(self):
         return f"Alpha {self.steps} {self.parameterFile}"
