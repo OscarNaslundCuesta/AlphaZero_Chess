@@ -35,6 +35,8 @@ test=[]
 validate=[]
 
 for idx,file in enumerate(os.listdir(data_path_in)):
+            if not file.endswith('.gz'):
+                continue
             filename = os.path.join(data_path_in,file)
             print(f"{idx} {filename}")
 
