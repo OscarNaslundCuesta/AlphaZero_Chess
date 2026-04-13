@@ -2,7 +2,7 @@
 from compress_pickle import dump
 import copy
 import pexpect
-import re 
+import re
 import numpy as np
 import sys
 import time
@@ -55,9 +55,9 @@ def do_decode_n_move_pieces(board,i,f,p):
             board.move_piece((0,0),(0,3),None)
     return board
 
-code=config.rootDir+"/stockfish/stockfish-ubuntu-x86-64-avx2"
+code="/opt/homebrew/bin/stockfish"
 
-child=pexpect.spawn(code)
+child=pexpect.spawn(code, maxread=200000)
 child.expect('Stockfish')
 child.sendline("setoption name MultiPV value 10")
 child.sendline("setoption name Hash value 256")
@@ -69,7 +69,7 @@ child.expect("uciok")
 
 dataset_p = []
 
-for gameId in range(1):
+for gameId in range(9999):
     if time.time()>startTime+runtime:
         print("exceeded runtime - exiting")
         break
@@ -78,25 +78,38 @@ for gameId in range(1):
     current_board = c_board()
     moveNumber=0
     moves=""
-    
+
     continueGame=True
     while continueGame:
         board_state = copy.deepcopy(ed.encode_board(current_board))
 
         child.sendline("position startpos moves "+moves)
         child.sendline("go depth 10")
-        i=child.expect([r"bestmove (.*) ponder",r"bestmove (.*)\r"])
+        try:
+            i=child.expect([r"bestmove (.*) ponder",r"bestmove (.*)\r"], timeout=120)
+        except pexpect.TIMEOUT:
+            print(f"Stockfish timeout at move {moveNumber}, skipping game")
+            # Restart Stockfish for clean state
+            child.close()
+            child=pexpect.spawn(code, maxread=200000)
+            child.expect('Stockfish')
+            child.sendline("setoption name MultiPV value 10")
+            child.sendline("setoption name Hash value 256")
+            child.sendline("setoption name UCI_ShowWDL value true")
+            child.sendline("uci")
+            child.expect("uciok")
+            break
         bestScore=-999999
-        
+
         scoreList=[]
         moveList=[]
         for line in child.before.decode().splitlines():
             #print("l:"+line)
-            m=re.match("info depth 10 seldepth (\d+) multipv (\d+) score (cp|mate) ([-]*\d+) wdl (\d+) (\d+) (\d+) nodes (\d+) nps (\d+) hashfull (\d+) tbhits (\d+) time (\d+) pv ([a-zA-Z0-9_]*)",line)
+            m=re.match(r"info depth 10 seldepth (\d+) multipv (\d+) score (cp|mate) ([-]*\d+) wdl (\d+) (\d+) (\d+) nodes (\d+) nps (\d+) hashfull (\d+) tbhits (\d+) time (\d+) pv ([a-zA-Z0-9_]*)",line)
             if m:
                 (_,_,mate,score,win,draw,lose,_,_,_,_,_,proposedMove)=m.groups()
                 score=int(score)
-                
+
                 if mate=="mate":
                     if score>0:
                         score=1000+(10-score)*100
@@ -113,23 +126,23 @@ for gameId in range(1):
                 if score>(bestScore-200):
                     scoreList.append(score)
                     moveList.append(proposedMove)
-                
+
 
         if i==0:
-            out=child.after.decode()    
+            out=child.after.decode()
             b=re.match(r"bestmove (.*) ponder",out)
         else:
             out=child.after.decode()
             b=re.match(r"bestmove (.*)\r",out)
         bestmove=b.group(1)
-        
+
         if bestmove=="(none)":
             print(f"checkmate moves:{moveNumber}")
             break
 
         max=softmax(scoreList)
         newmove=np.random.choice(moveList,1,True,max)
-        print(f"N:{newmove} B:{bestmove} {moveNumber}")
+        #print(f"N:{newmove} B:{bestmove} {moveNumber}")
 
         policy=np.zeros(4672)
         for (move,odds) in zip(moveList,max):
@@ -143,7 +156,7 @@ for gameId in range(1):
                     promote="knight"
                 case "B":
                     promote="bishop"
-            try: 
+            try:
                 enc_index=ed.encode_action(current_board,initial,final,promote)
             except:
                 continueGame=False
@@ -158,10 +171,11 @@ for gameId in range(1):
         #moves=moves+" "+bestmove
         moves=moves+" "+newmove[0]
         moveNumber+=1
-        if moveNumber>500 or (bestDraw>997 and moveNumber>100):
+        if moveNumber>200 or (bestDraw>997 and moveNumber>100):
             print(f"draw moves:{moveNumber}")
             break
 
-print("saving games")
-with open(f"{config.rootDir}/data/games/data_{runId}.gz", 'wb') as output:
+filepath=f"{config.rootDir}/data/games/data_{runId}.gz"
+print(f"saving {len(dataset_p)} positions to {filepath}")
+with open(filepath, 'wb') as output:
          dump(dataset_p, output)
