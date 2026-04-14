@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>AlphaZero Chess</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #1a1a2e; color: #eee; font-family: -apple-system, sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+  #app { text-align: center; }
+  h1 { font-size: 1.4em; margin-bottom: 12px; color: #aaa; }
+  #board-container { display: inline-block; position: relative; }
+  #board { display: grid; grid-template-columns: repeat(8, 70px); grid-template-rows: repeat(8, 70px); border: 3px solid #555; }
+  .square { width: 70px; height: 70px; display: flex; align-items: center; justify-content: center; font-size: 44px; cursor: pointer; user-select: none; position: relative; }
+  .square .white-piece { color: #fff; text-shadow: 0 0 2px #000, 0 0 2px #000; }
+  .square .black-piece { color: #000; }
+  .light { background: #f0d9b5; }
+  .dark { background: #b58863; }
+  .square.selected { box-shadow: inset 0 0 0 4px #ffeb3b; }
+  .square.legal-target::after { content: ''; position: absolute; width: 20px; height: 20px; background: rgba(0,0,0,0.2); border-radius: 50%; }
+  .square.legal-capture::after { content: ''; position: absolute; width: 62px; height: 62px; border: 4px solid rgba(0,0,0,0.2); border-radius: 50%; }
+  .square.last-move { background: #cdd26a !important; }
+  .coords-rank { position: absolute; left: -24px; display: flex; flex-direction: column; height: 560px; }
+  .coords-file { position: absolute; bottom: -24px; display: flex; width: 560px; }
+  .coord { width: 70px; height: 70px; display: flex; align-items: center; justify-content: center; font-size: 13px; color: #888; }
+  .coord-r { width: 24px; }
+  #status { margin-top: 16px; font-size: 1.1em; min-height: 28px; }
+  #controls { margin-top: 12px; }
+  button { background: #16213e; color: #eee; border: 1px solid #555; padding: 8px 20px; margin: 0 4px; cursor: pointer; border-radius: 4px; font-size: 0.95em; }
+  button:hover { background: #0f3460; }
+  #promotion-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); z-index: 10; justify-content: center; align-items: center; }
+  #promotion-overlay.active { display: flex; }
+  #promotion-picker { background: #2a2a4a; padding: 20px; border-radius: 8px; }
+  #promotion-picker span { font-size: 52px; cursor: pointer; margin: 0 8px; }
+  #promotion-picker span:hover { background: rgba(255,255,255,0.1); border-radius: 4px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <h1>AlphaZero Chess</h1>
+  <div id="board-container">
+    <div class="coords-rank" id="ranks"></div>
+    <div id="board"></div>
+    <div class="coords-file" id="files"></div>
+  </div>
+  <div id="status">Choose your color</div>
+  <div id="controls">
+    <button onclick="startGame('w')">Play as White</button>
+    <button onclick="startGame('b')">Play as Black</button>
+    <button onclick="resetGame()">New Game</button>
+  </div>
+</div>
+
+<div id="promotion-overlay">
+  <div id="promotion-picker"></div>
+</div>
+
+<script>
+const PIECES = { K:'\u265A', Q:'\u265B', R:'\u265C', B:'\u265D', N:'\u265E', P:'\u265F',
+                 k:'\u265A', q:'\u265B', r:'\u265C', b:'\u265D', n:'\u265E', p:'\u265F' };
+
+let boardState = [];
+let moves = [];
+let legalMoves = [];
+let selected = null;
+let humanWhite = true;
+let gameActive = false;
+let lastMoveFrom = -1, lastMoveTo = -1;
+
+function initBoard() {
+  boardState = [
+    ['r','n','b','q','k','b','n','r'],
+    ['p','p','p','p','p','p','p','p'],
+    ['','','','','','','',''],
+    ['','','','','','','',''],
+    ['','','','','','','',''],
+    ['','','','','','','',''],
+    ['P','P','P','P','P','P','P','P'],
+    ['R','N','B','Q','K','B','N','R']
+  ];
+}
+
+function isHumanTurn() {
+  return (moves.length % 2 === 0) === humanWhite;
+}
+
+function render() {
+  const board = document.getElementById('board');
+  const flipped = !humanWhite;
+  board.innerHTML = '';
+  for (let vi = 0; vi < 8; vi++) {
+    for (let vj = 0; vj < 8; vj++) {
+      const r = flipped ? 7 - vi : vi;
+      const c = flipped ? 7 - vj : vj;
+      const idx = r * 8 + c;
+      const sq = document.createElement('div');
+      sq.className = 'square ' + ((r + c) % 2 === 0 ? 'light' : 'dark');
+      if (idx === lastMoveFrom || idx === lastMoveTo) sq.classList.add('last-move');
+      if (selected === idx) sq.classList.add('selected');
+
+      // show legal move dots
+      if (selected !== null && gameActive && isHumanTurn()) {
+        const fromR = Math.floor(selected / 8), fromC = selected % 8;
+        const fromUci = String.fromCharCode(97 + fromC) + (8 - fromR);
+        const toUci = String.fromCharCode(97 + c) + (8 - r);
+        const isLegal = legalMoves.some(m => m.startsWith(fromUci + toUci));
+        if (isLegal) {
+          sq.classList.add(boardState[r][c] ? 'legal-capture' : 'legal-target');
+        }
+      }
+
+      const piece = boardState[r][c];
+      if (piece) {
+        const span = document.createElement('span');
+        span.textContent = PIECES[piece] || piece;
+        span.className = piece === piece.toUpperCase() ? 'white-piece' : 'black-piece';
+        sq.appendChild(span);
+      }
+      sq.dataset.idx = idx;
+      sq.addEventListener('click', () => onSquareClick(r, c, idx));
+      board.appendChild(sq);
+    }
+  }
+
+  // coords
+  const ranks = document.getElementById('ranks');
+  const files = document.getElementById('files');
+  ranks.innerHTML = '';
+  files.innerHTML = '';
+  for (let i = 0; i < 8; i++) {
+    const ri = flipped ? i : 7 - i;
+    const fi = flipped ? 7 - i : i;
+    ranks.innerHTML += `<div class="coord coord-r">${ri + 1}</div>`;
+    files.innerHTML += `<div class="coord">${String.fromCharCode(97 + fi)}</div>`;
+  }
+}
+
+function onSquareClick(r, c, idx) {
+  if (!gameActive || !isHumanTurn()) return;
+
+  if (selected === null) {
+    const piece = boardState[r][c];
+    console.log(`Click: r=${r} c=${c} piece='${piece}' legalMoves=${legalMoves.length}`);
+    if (!piece) return;
+    const isWhitePiece = piece === piece.toUpperCase();
+    const whiteToMove = moves.length % 2 === 0;
+    console.log(`isWhite=${isWhitePiece} whiteToMove=${whiteToMove} piece='${piece}'`);
+    if (isWhitePiece !== whiteToMove) return;
+    selected = idx;
+    render();
+  } else {
+    const fromR = Math.floor(selected / 8), fromC = selected % 8;
+    if (idx === selected) { selected = null; render(); return; }
+
+    // clicking own piece switches selection
+    const piece = boardState[r][c];
+    if (piece) {
+      const isWhitePiece = piece === piece.toUpperCase();
+      const whiteToMove = moves.length % 2 === 0;
+      if (isWhitePiece === whiteToMove) { selected = idx; render(); return; }
+    }
+
+    const fromUci = String.fromCharCode(97 + fromC) + (8 - fromR);
+    const toUci = String.fromCharCode(97 + c) + (8 - r);
+    const baseMove = fromUci + toUci;
+
+    // check promotion
+    const movingPiece = boardState[fromR][fromC];
+    const isPromotion = (movingPiece === 'P' && r === 0) || (movingPiece === 'p' && r === 7);
+
+    const promotionMoves = legalMoves.filter(m => m.startsWith(baseMove) && m.length === 5);
+    if (isPromotion && promotionMoves.length > 0) {
+      showPromotionPicker(baseMove, moves.length % 2 === 0);
+      return;
+    }
+
+    if (legalMoves.includes(baseMove)) {
+      makeHumanMove(baseMove);
+    } else {
+      selected = null;
+      render();
+    }
+  }
+}
+
+function showPromotionPicker(baseMove, isWhite) {
+  const overlay = document.getElementById('promotion-overlay');
+  const picker = document.getElementById('promotion-picker');
+  const pieces = isWhite ? ['Q','R','B','N'] : ['q','r','b','n'];
+  picker.innerHTML = '';
+  pieces.forEach(p => {
+    const sp = document.createElement('span');
+    sp.textContent = PIECES[p];
+    sp.addEventListener('click', () => {
+      overlay.classList.remove('active');
+      makeHumanMove(baseMove + p.toLowerCase());
+    });
+    picker.appendChild(sp);
+  });
+  overlay.classList.add('active');
+}
+
+function applyMove(uci) {
+  const fromC = uci.charCodeAt(0) - 97;
+  const fromR = 8 - parseInt(uci[1]);
+  const toC = uci.charCodeAt(2) - 97;
+  const toR = 8 - parseInt(uci[3]);
+  const prom = uci.length === 5 ? uci[4] : null;
+
+  const piece = boardState[fromR][fromC];
+
+  // en passant capture
+  if (piece.toLowerCase() === 'p' && fromC !== toC && !boardState[toR][toC]) {
+    boardState[fromR][toC] = '';
+  }
+
+  boardState[toR][toC] = prom ? (piece === piece.toUpperCase() ? prom.toUpperCase() : prom.toLowerCase()) : piece;
+  boardState[fromR][fromC] = '';
+
+  // castling
+  if (piece === 'K' && fromC === 4 && Math.abs(toC - fromC) === 2) {
+    if (toC === 6) { boardState[7][5] = 'R'; boardState[7][7] = ''; }
+    if (toC === 2) { boardState[7][3] = 'R'; boardState[7][0] = ''; }
+  }
+  if (piece === 'k' && fromC === 4 && Math.abs(toC - fromC) === 2) {
+    if (toC === 6) { boardState[0][5] = 'r'; boardState[0][7] = ''; }
+    if (toC === 2) { boardState[0][3] = 'r'; boardState[0][0] = ''; }
+  }
+
+  lastMoveFrom = fromR * 8 + fromC;
+  lastMoveTo = toR * 8 + toC;
+}
+
+async function makeHumanMove(uci) {
+  selected = null;
+  applyMove(uci);
+  moves.push(uci);
+  render();
+  setStatus('AI is thinking...');
+
+  try {
+    const resp = await fetch('/api/move?moves=' + moves.join(','));
+    const data = await resp.json();
+    if (data.status === 'ok') {
+      applyMove(data.move);
+      moves.push(data.move);
+      legalMoves = data.legal || [];
+      if (legalMoves.length === 0) {
+        setStatus('Game over!');
+        gameActive = false;
+      } else {
+        setStatus(`Your turn (move ${Math.floor(moves.length/2) + 1})`);
+      }
+    } else {
+      setStatus('Game over! ' + (data.reason || ''));
+      gameActive = false;
+    }
+  } catch (e) {
+    setStatus('Error: ' + e.message);
+  }
+  render();
+}
+
+async function startGame(color) {
+  humanWhite = color === 'w';
+  initBoard();
+  moves = [];
+  legalMoves = [];
+  selected = null;
+  lastMoveFrom = -1;
+  lastMoveTo = -1;
+  gameActive = true;
+
+  // get initial legal moves
+  const resp = await fetch('/api/legal?moves=');
+  const data = await resp.json();
+  legalMoves = data.legal || [];
+
+  if (!humanWhite) {
+    render();
+    setStatus('AI is thinking...');
+    const resp2 = await fetch('/api/move?moves=');
+    const data2 = await resp2.json();
+    if (data2.status === 'ok') {
+      applyMove(data2.move);
+      moves.push(data2.move);
+      legalMoves = data2.legal || [];
+      setStatus('Your turn (move 1)');
+    }
+  } else {
+    setStatus('Your turn (move 1)');
+  }
+  render();
+}
+
+function resetGame() {
+  initBoard();
+  moves = [];
+  legalMoves = [];
+  selected = null;
+  lastMoveFrom = -1;
+  lastMoveTo = -1;
+  gameActive = false;
+  setStatus('Choose your color');
+  render();
+}
+
+function setStatus(msg) {
+  document.getElementById('status').textContent = msg;
+}
+
+initBoard();
+render();
+</script>
+</body>
+</html>
