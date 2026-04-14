@@ -186,11 +186,11 @@ def train2(net,train_path,trainingCount,lr,batch_size,cpu):
 
 #test_data=board_data_all(train_path,testCount)
 if __name__=="__main__":
-    trainingCount=1000000
+    trainingCount=100000
     testCount=10000
     epochs=10
-    lrList=[0.01]
-    batch_size=2500
+    lrList=[0.0001, 0.0003, 0.001, 0.003, 0.01]
+    batch_size=512
 
     mp.set_start_method("spawn",force=True)
     
