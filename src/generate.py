@@ -68,11 +68,27 @@ child.sendline("uci")
 child.expect("uciok")
 
 dataset_p = []
+fileCount = 0
+
+def save_data():
+    global dataset_p, fileCount
+    if len(dataset_p) == 0:
+        return
+    filepath=f"{config.rootDir}/data/games/data_{runId}_{fileCount}.gz"
+    print(f"saving {len(dataset_p)} positions to {filepath}")
+    with open(filepath, 'wb') as output:
+        dump(dataset_p, output)
+    fileCount += 1
+    dataset_p = []
 
 for gameId in range(9999):
     if time.time()>startTime+runtime:
         print("exceeded runtime - exiting")
         break
+
+    # Save every 10 games to avoid losing data
+    if gameId > 0 and gameId % 10 == 0:
+        save_data()
 
     print(f"RunId {runId} game {gameId} remaining time {startTime+runtime-time.time()}")
     current_board = c_board()
@@ -86,7 +102,7 @@ for gameId in range(9999):
         child.sendline("position startpos moves "+moves)
         child.sendline("go depth 10")
         try:
-            i=child.expect([r"bestmove (.*) ponder",r"bestmove (.*)\r"], timeout=120)
+            i=child.expect([r"bestmove (.*) ponder",r"bestmove (.*)\r"], timeout=30)
         except pexpect.TIMEOUT:
             print(f"Stockfish timeout at move {moveNumber}, skipping game")
             # Restart Stockfish for clean state
@@ -175,7 +191,4 @@ for gameId in range(9999):
             print(f"draw moves:{moveNumber}")
             break
 
-filepath=f"{config.rootDir}/data/games/data_{runId}.gz"
-print(f"saving {len(dataset_p)} positions to {filepath}")
-with open(filepath, 'wb') as output:
-         dump(dataset_p, output)
+save_data()
